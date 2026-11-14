@@ -1,0 +1,57 @@
+# Consumer workflow: manually triggered, uses the published image without building source.
+name: Published image integration tests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: rsa-pss-sha256
+            signing_secret: CI_RSA_PRIVATE_KEY
+          - profile: ecdsa-p256-sha256
+            signing_secret: CI_ECDSA_PRIVATE_KEY
+          - profile: ed25519
+            signing_secret: CI_ED25519_PRIVATE_KEY
+    steps:
+      - name: Check out trusted test configuration
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Run sign, verify, and deployment tests
+        env:
+          PROFILE: ${{ matrix.profile }}
+          SIGNING_KEY: ${{ secrets[matrix.signing_secret] }}
+          CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          key_file=$(mktemp "$RUNNER_TEMP/tacstmu-key.XXXXXX")
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "$SIGNING_KEY" > "$key_file"
+          unset SIGNING_KEY
+          # The script pulls the image
+          python3 ci/consumer/run_scenarios.py \
+            --profile "$PROFILE" \
+            --key "$key_file" \
+            --trust-store ci/trust.json \
+            --out "results/$PROFILE"
+
+      - name: Save sanitized evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-evidence-${{ matrix.profile }}
+          path: results/${{ matrix.profile }}/
+          if-no-files-found: warn
+          retention-days: 14
