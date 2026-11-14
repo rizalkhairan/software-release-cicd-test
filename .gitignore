@@ -1,5 +1,6 @@
 .ci-test-keys/
 *.key.pem
 results/
+dist/
 __pycache__/
 *.py[cod]

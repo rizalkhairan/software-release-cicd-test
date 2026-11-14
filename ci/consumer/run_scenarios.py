@@ -48,13 +48,14 @@ def sign_release(config, folder):
         f"{config.key}:/run/signing.key.pem:ro",
     ]
     commands = [
-        "sign", "--file", "/input/app.bin",
+        "sign", "--file", f"/input/{config.artifact.name}",
         "--package", "ci-demo", "--version", "1.0.0",
         "--key", "/run/signing.key.pem", "--out", "/output/bundle.json",
     ]
     result = run_container(config, folder, "sign", mounts=mounts, command=commands)
     if result.returncode != 0:
-        raise RuntimeError(f"{folder.name}: signing failed; see sign.stderr.log")
+        error = result.stderr.decode(errors="replace").strip()
+        raise RuntimeError(f"{folder.name}: signing failed (exit {result.returncode}): {error}")
 
 
 def verify_release(config, folder):
@@ -64,7 +65,7 @@ def verify_release(config, folder):
         f"{folder / 'trust.json'}:/trust.json:ro",
     ]
     command = [
-        "verify", "--file", "/input/app.bin", "--bundle", "/output/bundle.json",
+        "verify", "--file", f"/input/{config.artifact.name}", "--bundle", "/output/bundle.json",
         "--trust-store", "/trust.json", "--package", "ci-demo",
         "--version", "1.0.0", "--json",
     ]
@@ -75,8 +76,8 @@ def run_scenario(config, name):
     folder = config.out / name
     (folder / "input").mkdir(parents=True)
     (folder / "release").mkdir()
-    artifact = folder / "input/app.bin"
-    artifact.write_bytes(b"CI release artifact\x00\xff\n")
+    artifact = folder / "input" / config.artifact.name
+    shutil.copyfile(config.artifact, artifact)
     shutil.copyfile(config.trust_store, folder / "trust.json")
     sign_release(config, folder)
 
@@ -122,10 +123,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", default=DEFAULT_IMAGE)
     parser.add_argument("--profile", required=True, choices=PROFILES)
+    parser.add_argument("--artifact", required=True, type=Path, help="project release archive to sign")
     parser.add_argument("--key", required=True, type=Path)
     parser.add_argument("--trust-store", type=Path, default=Path("ci/trust.json"))
     parser.add_argument("--out", required=True, type=Path, help="new output directory")
     config = parser.parse_args()
+    config.artifact = config.artifact.resolve()
     config.key = config.key.resolve()
     config.trust_store = config.trust_store.resolve()
     config.out = config.out.resolve()
@@ -133,6 +136,7 @@ def main():
 
     summary = {
         "image": config.image, "profile": config.profile,
+        "artifact": config.artifact.name, "source_commit": os.environ.get("RELEASE_COMMIT"),
         "uid": os.getuid(), "gid": os.getgid(), "network": "none", "tty": False,
         "run_url": os.environ.get("CI_RUN_URL"), "results": [], "passed": False,
     }
@@ -140,7 +144,8 @@ def main():
     try:
         pulled = run_command(["docker", "pull", config.image], config.out, "pull")
         if pulled.returncode != 0:
-            raise RuntimeError("image pull failed; see pull.stderr.log")
+            error = pulled.stderr.decode(errors="replace").strip()
+            raise RuntimeError(f"image pull failed (exit {pulled.returncode}): {error}")
 
         # All alg for C01
         scenarios = list(EXPECTED_RESULTS) if config.profile == "ed25519" else ["C01"]

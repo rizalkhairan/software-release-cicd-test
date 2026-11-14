@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   integration:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -22,16 +22,22 @@ jobs:
           - profile: ed25519
             signing_secret: CI_ED25519_PRIVATE_KEY
     steps:
-      - name: Check out trusted test configuration
-        uses: actions/checkout@v4
+      - name: Check out project
+        uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Package project release
+        run: |
+          mkdir -p dist
+          git archive --format=tar.gz --output=dist/project.tar.gz HEAD
 
       - name: Run sign, verify, and deployment tests
         env:
           PROFILE: ${{ matrix.profile }}
           SIGNING_KEY: ${{ secrets[matrix.signing_secret] }}
           CI_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RELEASE_COMMIT: ${{ github.sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -43,13 +49,14 @@ jobs:
           # The script pulls the image
           python3 ci/consumer/run_scenarios.py \
             --profile "$PROFILE" \
+            --artifact dist/project.tar.gz \
             --key "$key_file" \
             --trust-store ci/trust.json \
             --out "results/$PROFILE"
 
       - name: Save sanitized evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-evidence-${{ matrix.profile }}
           path: results/${{ matrix.profile }}/
